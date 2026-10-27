@@ -15,6 +15,8 @@ installation works with any number of machines.
 > `>=0.2.1-rc.3 <0.3.0` (declared in `engines.dsh`). DSH is a developer preview
 > and breaks compatibility between releases, so pin the Harness version you run.
 
+Published on npm as [`dsh-plugin-ssh-remote`](https://www.npmjs.com/package/dsh-plugin-ssh-remote).
+
 ## Why this one
 
 Most SSH tooling for an agent makes the whole session remote: the shell, the file
@@ -40,12 +42,17 @@ larger and solve a different problem.
 ## Install
 
 ```
-# from npm, once published
+# from npm
 dsh plugin --profile web add dsh-plugin-ssh-remote
 
-# from a local checkout
+# from a local checkout, for development
 plugin_manager action=install_bundle target=<absolute path to this folder>
 ```
+
+It needs Node >= 22 and DSH >= 0.2.1-rc.3. The package declares `engines.dsh`,
+so `dsh plugin add` refuses a host outside that range instead of installing
+half-way. There is nothing else to install: the plugin drives the `ssh` and
+`scp` binaries already on the machine, so it pulls in no runtime dependencies.
 
 Then add servers with `/ssh sync` (import from `~/.ssh/config`) or `/ssh add`.
 
@@ -162,7 +169,7 @@ caught. **The real boundary is a dedicated server user without `sudo`**; keep
 ## Tests
 
 ```
-npm install          # one peer dependency, @deepseek-ai/schemastery, for the tests
+npm install          # one dev dependency, @deepseek-ai/schemastery, for the tests
 npm test             # both suites
 ```
 
