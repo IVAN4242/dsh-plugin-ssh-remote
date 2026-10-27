@@ -17,3 +17,6 @@ desktop.ini
 *.log
 .vscode/
 .idea/
+
+# npm scratch used for pack/publish checks
+.npm-cache/
