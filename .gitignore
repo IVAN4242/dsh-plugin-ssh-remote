@@ -1,0 +1,19 @@
+# Dependencies (the plugin has none; this is for local tooling)
+node_modules/
+
+# Runtime state. These files hold server addresses, passwords and command
+# history, and every one of them is created next to $DSH_HOME by a real run.
+ssh-remote-hosts.json
+ssh-remote-secrets.json
+ssh-remote-audit.jsonl
+ssh-remote-audit.jsonl.*
+ssh-remote-askpass/
+*.tmp
+
+# OS and editor noise
+.DS_Store
+Thumbs.db
+desktop.ini
+*.log
+.vscode/
+.idea/

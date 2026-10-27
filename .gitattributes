@@ -1,0 +1,8 @@
+# Store text as LF so a checkout on Windows (core.autocrlf=true) cannot rewrite
+# line endings and turn a byte-comparing test into a spurious failure.
+* text=auto eol=lf
+
+# Generated artifacts, if any are ever added, keep their bytes.
+*.png binary
+*.jpg binary
+*.zip binary

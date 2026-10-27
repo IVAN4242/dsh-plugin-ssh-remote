@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: node ${{ matrix.node }} on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        node: [22, 24]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      # The plugin has no runtime dependencies: the host provides
+      # @deepseek-ai/schemastery, and the tests need it resolvable locally.
+      - name: Install the peer dependency for the tests
+        run: npm install --no-audit --no-fund
+
+      # Both suites must stay green on every supported OS: the Windows-specific
+      # paths (icacls, *.exe defaults, rename retries) only run there.
+      - name: Pure layers (argv, policy, redaction, registry, ACL, audit)
+        run: node test-args.mjs
+
+      - name: Host half (tools, policy gate, /ssh) on the fake subprocess
+        run: node test-host.mjs
+
+      # The test files legitimately contain fake key material, so the scan covers
+      # the shipped sources and the docs rather than the whole tree (and would
+      # otherwise match its own regex).
+      - name: No secrets or personal addresses committed
+        shell: bash
+        run: |
+          set -euo pipefail
+          hits=$(grep -InE '(BEGIN [A-Z ]*PRIVATE KEY|AKIA[0-9A-Z]{16}|77\.239\.|94\.232\.)' \
+            index.js args.js registry.js secrets.js audit.js acl.js atomic.js \
+            cordis.patch.yml profile-patch-snippet.yml README.md README.ru.md || true)
+          if [ -n "$hits" ]; then
+            echo "$hits"
+            echo "::error::a private key, an access key or a real server address is committed"
+            exit 1
+          fi

@@ -1,0 +1,63 @@
+# SSH Remote — settings for the profile's cordis.patch.yml.
+#
+# A patch REPLACES the targeted row's whole `config` rather than merging into it,
+# so this snippet restates every key it wants to keep. Copy the block below into
+# the profile patch and edit the values.
+#
+# The server list is NOT configured here: it lives in $DSH_HOME/ssh-remote-hosts.json
+# and is edited with /ssh, /ssh add, /ssh sync — or by the agent through
+# ssh_host_add, which asks for your confirmation first.
+
+- id: ssh-remote
+  config:
+    # Where the server registry lives. Omit to use $DSH_HOME/ssh-remote-hosts.json.
+    # registryPath: 'C:\\Users\\you\\.dsh\\ssh-remote-hosts.json'
+
+    # Where saved passwords live. Omit to use $DSH_HOME/ssh-remote-secrets.json.
+    # Prefer keys; a password is a fallback for a server with no key installed yet.
+    # secretsPath: 'C:\\Users\\you\\.dsh\\ssh-remote-secrets.json'
+
+    # Action log: one JSON line per remote client call. Omit to use
+    # $DSH_HOME/ssh-remote-audit.jsonl. Rotates by 10 MB into <path>.1.
+    # auditLogPath: 'C:\\Users\\you\\.dsh\\ssh-remote-audit.jsonl'
+
+    # Scratch directory for the transient SSH_ASKPASS helper. Recreated per call
+    # and cleaned up afterwards; a crash leftover is cleared at the next start.
+    # askpassDir: 'C:\\Users\\you\\.dsh\\ssh-remote-askpass'
+
+    # Source for /ssh sync. Omit to use ~/.ssh/config.
+    # sshConfigPath: 'C:\\Users\\you\\.ssh\\config'
+
+    # Keep this false. When true, ssh_run accepts an address that is not a
+    # registered server name, which removes the registry's role as an allowlist.
+    allowRawHosts: false
+
+    # OpenSSH clients. Omit to use the platform default (on Windows,
+    # %SystemRoot%\System32\OpenSSH\ssh.exe and scp.exe).
+    # sshPath: 'C:\\Windows\\System32\\OpenSSH\\ssh.exe'
+    # scpPath: 'C:\\Windows\\System32\\OpenSSH\\scp.exe'
+
+    connectTimeoutMs: 10000
+    serverAliveIntervalSec: 15
+    serverAliveCountMax: 3
+
+    # Command deadline: the default, and the ceiling any request is clamped to.
+    defaultTimeoutMs: 120000
+    maxTimeoutMs: 1800000
+
+    # Per-stream output ceiling. Both ends are kept: the error of a long build is
+    # at the end, and a head-only cut hid it.
+    maxOutputChars: 60000
+
+    # How a risky but legitimate command is treated.
+    #   standard — ask for confirmation (rm -rf /var/www, apt purge, DROP DATABASE)
+    #   off      — do not ask; write a warning to the log
+    # Catastrophic commands (rm -rf /, mkfs, dd to a device, shutdown) are refused
+    # under BOTH values, and that tier is not configurable.
+    commandPolicy: standard
+
+    # OpenSSH connection sharing. Requires a POSIX local endpoint: the Windows
+    # client cannot forward the Unix socket it needs, so leaving this false is
+    # correct on Windows. Set controlPath when enabling it.
+    multiplex: false
+    # controlPath: '/tmp/ssh-remote-%C.sock'

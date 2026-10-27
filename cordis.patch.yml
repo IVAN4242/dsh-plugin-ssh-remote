@@ -1,0 +1,16 @@
+# SSH Remote bundle patch.
+#
+# Inserts the Host half as one row. The profile's own cordis.patch.yml is applied
+# AFTER every bundle layer, so a row with the same id there replaces this whole
+# `config` — that is where deployment settings belong.
+#
+# A patch replaces the targeted row's complete config rather than merging into it,
+# so the profile layer must restate every key it wants to keep.
+#
+# The server registry itself is NOT configured here: it lives in
+# $DSH_HOME/ssh-remote-hosts.json and is edited through /ssh or ssh_host_add.
+
+- insert:
+    - id: ssh-remote
+      name: 'dsh-plugin-ssh-remote'
+      config: {}

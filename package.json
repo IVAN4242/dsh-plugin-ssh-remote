@@ -1,0 +1,71 @@
+{
+  "name": "dsh-plugin-ssh-remote",
+  "version": "0.1.0",
+  "description": "Manage any number of VPS servers over SSH: a server registry, /ssh selection, command and transfer tools, read-only navigation, a destructive-command guard, secret redaction and an action log.",
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "dsh",
+    "ssh",
+    "scp",
+    "vps",
+    "remote",
+    "ops"
+  ],
+  "license": "MIT",
+  "author": "Ivan",
+  "type": "module",
+  "main": "./index.js",
+  "exports": {
+    ".": "./index.js",
+    "./args": "./args.js",
+    "./registry": "./registry.js",
+    "./atomic": "./atomic.js"
+  },
+  "files": [
+    "acl.js",
+    "args.js",
+    "atomic.js",
+    "audit.js",
+    "cordis.patch.yml",
+    "index.js",
+    "profile-patch-snippet.yml",
+    "registry.js",
+    "secrets.js",
+    "README.md",
+    "README.ru.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/schemastery": "^3.18.0"
+  },
+  "devDependencies": {
+    "@deepseek-ai/schemastery": "^3.18.4"
+  },
+  "scripts": {
+    "test": "node test-args.mjs && node test-host.mjs",
+    "test:args": "node test-args.mjs",
+    "test:host": "node test-host.mjs",
+    "test:live": "node test-live.mjs"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/IVAN4242/dsh-plugin-ssh-remote.git"
+  },
+  "homepage": "https://github.com/IVAN4242/dsh-plugin-ssh-remote#readme",
+  "bugs": {
+    "url": "https://github.com/IVAN4242/dsh-plugin-ssh-remote/issues"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "meta": {
+    "title": "SSH Remote",
+    "description": "Connect to your VPS servers over SSH and run commands or transfer files."
+  }
+}
