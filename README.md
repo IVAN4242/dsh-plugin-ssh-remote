@@ -11,7 +11,8 @@ Authentication is by key where one is configured, and by a stored password
 otherwise. The plugin ships **no server addresses**: you add your own, so one
 installation works with any number of machines.
 
-> Status: 0.1.0, tested against Harness `0.2.1-rc.3`. DSH is a developer preview
+> Status: 0.1.0, tested against Harness `0.2.1-rc.3` and allowed on
+> `>=0.2.1-rc.3 <0.3.0` (declared in `engines.dsh`). DSH is a developer preview
 > and breaks compatibility between releases, so pin the Harness version you run.
 
 ## Why this one
