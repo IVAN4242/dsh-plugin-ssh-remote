@@ -11,7 +11,7 @@ Authentication is by key where one is configured, and by a stored password
 otherwise. The plugin ships **no server addresses**: you add your own, so one
 installation works with any number of machines.
 
-> Status: 0.1.0, tested against Harness `0.2.1-rc.3` and allowed on
+> Status: 0.2.0, tested against Harness `0.2.1-rc.3` and allowed on
 > `>=0.2.1-rc.3 <0.3.0` (declared in `engines.dsh`). DSH is a developer preview
 > and breaks compatibility between releases, so pin the Harness version you run.
 
@@ -71,7 +71,7 @@ that used to require a slash command:
   default remote directory and a note. Saving validates through the same
   `normalizeEntry` the tools use, so a bad port or a note typed into the key field
   is refused here rather than failing at the first connection. The name is a
-  human label: **several words work** (`RU VPS Serv-Tech`), in any script, and
+  human label: **several words work** (`Example VPS Server`), in any script, and
   runs of whitespace collapse to one space. A password typed in the same form is
   stored with the entry, so a server that has no key yet takes one visit, not two.
 - **Test** — runs the same `ssh -o BatchMode=yes … true` probe as `/ssh test`,

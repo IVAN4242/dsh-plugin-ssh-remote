@@ -421,11 +421,11 @@ await ok('a rename carries the stored password with the entry', async () => {
 })
 
 await ok('a server name may be several words', async () => {
-  const { payload } = await call('save', { name: 'RU VPS  Serv-Tech', host: '198.51.100.8' })
+  const { payload } = await call('save', { name: 'Example  VPS Server', host: '198.51.100.8' })
   assert.equal(payload.ok, true)
   // Runs of whitespace collapse, so the name is one identity.
-  assert.equal(payload.saved, 'RU VPS Serv-Tech')
-  assert.ok(payload.servers.some((server) => server.name === 'RU VPS Serv-Tech'))
+  assert.equal(payload.saved, 'Example VPS Server')
+  assert.ok(payload.servers.some((server) => server.name === 'Example VPS Server'))
 })
 
 await ok('keyScan reports the key the server presents', async () => {

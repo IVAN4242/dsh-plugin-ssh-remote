@@ -899,7 +899,7 @@ export function apply(ctx, config) {
       name: {
         type: 'string',
         required: true,
-        description: 'Short selection name, for example "web1" or "RU VPS Serv-Tech". Letters, digits, spaces, dot, dash, underscore or parentheses.',
+        description: 'Short selection name, for example "web1" or "Example VPS Server". Letters, digits, spaces, dot, dash, underscore or parentheses.',
       },
       host: { type: 'string', required: true, description: 'Address or OpenSSH host alias.' },
       user: { type: 'string', description: 'SSH user. Defaults to the client configuration.' },
@@ -2100,7 +2100,7 @@ export function apply(ctx, config) {
           }
 
           // A server name may contain spaces, so the WHOLE line is tried against
-          // the registry before the verb is parsed: `/ssh RU VPS Serv-Tech` must
+          // the registry before the verb is parsed: `/ssh Example VPS Server` must
           // be a name, not the unknown verb "RU". A verb still wins whenever no
           // server is named that way, so `/ssh test web1` keeps working.
           const named = findEntry(hosts, argument)

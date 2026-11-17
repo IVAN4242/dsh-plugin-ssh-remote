@@ -98,8 +98,8 @@ export function validateIdentityFile(value) {
  * tool's `host`, and printed in listings. It is therefore allowed to read like a
  * human label — several words, any script — while still being unambiguous:
  *
- *  - runs of whitespace collapse to one space, so "RU  VPS" and "RU VPS" are ONE
- *    identity rather than two entries that look identical in every listing;
+ *  - runs of whitespace collapse to one space, so "Example  VPS" and "Example VPS"
+ *    are ONE identity rather than two entries that look identical in every listing;
  *  - the first character is a letter or digit, so a name cannot start with the
  *    space that would confuse a bare `/ssh <name>` line;
  *  - `/`, `\`, `:` and quotes are refused: they belong to addresses and paths,

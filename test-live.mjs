@@ -248,7 +248,7 @@ await check('curl keeps all of its flags', async () => {
 })
 
 await check('systemctl cat prints the unit, not the unit list', async () => {
-  const out = stdoutOf(await call('ssh_run', { command: 'systemctl cat gaymers-server.service' }))
+  const out = stdoutOf(await call('ssh_run', { command: 'systemctl cat ssh.service' }))
   if (!/ExecStart/.test(out)) throw new Error(`got ${JSON.stringify(out).slice(0, 200)}`)
 })
 

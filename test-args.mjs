@@ -596,11 +596,11 @@ ok('entry normalization rejects unusable names and hosts', () => {
 
 ok('a server name may be several words, and whitespace runs collapse', () => {
   // The name is the selection key, but it is also what a person types and reads:
-  // "RU VPS Serv-Tech" is a name, and two spaces must not create a second entry
+  // "Example VPS Server" is a name, and two spaces must not create a second entry
   // that looks identical in every listing.
-  const named = normalizeEntry({ name: 'RU VPS  Serv-Tech', host: 'h' })
-  assert.equal(named.name, 'RU VPS Serv-Tech')
-  assert.equal(normalizeEntry({ name: '  RU VPS Serv-Tech  ', host: 'h' }).name, 'RU VPS Serv-Tech')
+  const named = normalizeEntry({ name: 'Example  VPS Server', host: 'h' })
+  assert.equal(named.name, 'Example VPS Server')
+  assert.equal(normalizeEntry({ name: '  Example VPS Server  ', host: 'h' }).name, 'Example VPS Server')
   // Any script, because the user's own language is a reasonable name.
   assert.equal(normalizeEntry({ name: 'Тестовый сервер', host: 'h' }).name, 'Тестовый сервер')
   assert.equal(normalizeEntry({ name: 'web (prod)', host: 'h' }).name, 'web (prod)')
