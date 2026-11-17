@@ -5,7 +5,7 @@
 # the profile patch and edit the values.
 #
 # The server list is NOT configured here: it lives in $DSH_HOME/ssh-remote-hosts.json
-# and is edited with /ssh, /ssh add, /ssh sync — or by the agent through
+# and is edited in Settings → SSH, with /ssh, or by the agent through
 # ssh_host_add, which asks for your confirmation first.
 
 - id: ssh-remote
@@ -16,6 +16,11 @@
     # Where saved passwords live. Omit to use $DSH_HOME/ssh-remote-secrets.json.
     # Prefer keys; a password is a fallback for a server with no key installed yet.
     # secretsPath: 'C:\\Users\\you\\.dsh\\ssh-remote-secrets.json'
+
+    # known_hosts the Settings page appends a CONFIRMED host key to. Omit to use
+    # ~/.ssh/known_hosts. Set it when your profile points UserKnownHostsFile
+    # somewhere else, or the confirmed key would not be the one ssh consults.
+    # knownHostsPath: 'C:\\Users\\you\\.ssh\\known_hosts'
 
     # Action log: one JSON line per remote client call. Omit to use
     # $DSH_HOME/ssh-remote-audit.jsonl. Rotates by 10 MB into <path>.1.

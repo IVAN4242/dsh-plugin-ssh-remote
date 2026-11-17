@@ -94,18 +94,34 @@ export function validateIdentityFile(value) {
 /**
  * Validate one candidate entry.
  *
- * The name doubles as the selection key, so it must be a short token with no
- * whitespace: it is typed after `/ssh` and printed in listings.
+ * The name doubles as the selection key: it is typed after `/ssh`, passed as a
+ * tool's `host`, and printed in listings. It is therefore allowed to read like a
+ * human label — several words, any script — while still being unambiguous:
+ *
+ *  - runs of whitespace collapse to one space, so "RU  VPS" and "RU VPS" are ONE
+ *    identity rather than two entries that look identical in every listing;
+ *  - the first character is a letter or digit, so a name cannot start with the
+ *    space that would confuse a bare `/ssh <name>` line;
+ *  - `/`, `\`, `:` and quotes are refused: they belong to addresses and paths,
+ *    and a name that looked like one would mislead whoever reads the registry.
  *
  * @param input - a candidate entry.
  * @returns the normalized entry.
  * @throws {RegistryError} when a required field is missing or malformed.
  */
 export function normalizeEntry(input) {
-  const name = typeof input?.name === 'string' ? input.name.trim() : ''
+  const rawName = typeof input?.name === 'string' ? input.name : ''
+  const name = rawName.trim().replace(/\s+/g, ' ')
   if (name.length === 0) throw new RegistryError('A server needs a name.', 'NAME_REQUIRED')
-  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name)) {
-    throw new RegistryError(`Server name "${name}" is invalid. Use letters, digits, dot, dash or underscore.`, 'NAME_INVALID')
+  if (name.length > 64) {
+    throw new RegistryError(`Server name "${name}" is too long: use at most 64 characters.`, 'NAME_INVALID')
+  }
+  if (!/^[\p{L}\p{N}][\p{L}\p{N} ._()-]*$/u.test(name)) {
+    throw new RegistryError(
+      `Server name "${name}" is invalid. Use letters, digits, spaces, dot, dash, underscore or parentheses — ` +
+        'no slashes, colons or quotes.',
+      'NAME_INVALID',
+    )
   }
   const host = typeof input?.host === 'string' ? input.host.trim() : ''
   if (host.length === 0) throw new RegistryError(`Server "${name}" needs a host address.`, 'HOST_REQUIRED')

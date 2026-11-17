@@ -33,8 +33,12 @@
  *
  * @module dsh-plugin-ssh-remote
  */
+import { createHash, randomUUID } from 'node:crypto'
 import { readFileSync } from 'node:fs'
-import { resolve as resolvePath } from 'node:path'
+import { appendFile, mkdir } from 'node:fs/promises'
+import { rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { dirname, resolve as resolvePath } from 'node:path'
 import z from '@deepseek-ai/schemastery'
 import {
   BATCH_MODE,
@@ -73,6 +77,8 @@ import {
   setPassword,
   writeSecrets,
 } from './secrets.js'
+import { UI_PATH, createUiApi } from './ui-api.js'
+import { mergeKnownHosts, parseKnownHosts } from './hostkey.js'
 
 /** Plugin display name; also the row id used by the bundle patch. */
 export const name = 'ssh-remote'
@@ -104,6 +110,14 @@ export const Config = z.object({
   auditLogPath: z.string(),
   /** OpenSSH client configuration, used as the source for `/ssh sync`. */
   sshConfigPath: z.string(),
+  /**
+   * `known_hosts` the Settings page appends a confirmed host key to.
+   *
+   * Defaults to `~/.ssh/known_hosts`. Set it when the profile uses a different
+   * `UserKnownHostsFile`: appending to the default file would leave the client
+   * still refusing the key.
+   */
+  knownHostsPath: z.string(),
   /** Allow connecting to an address that is not a registered server name. */
   allowRawHosts: z.boolean().default(false),
   /** Explicit client paths; otherwise the platform defaults are used. */
@@ -147,6 +161,12 @@ function defaultClient(program) {
 function defaultSshConfigPath() {
   const home = process.env.USERPROFILE ?? process.env.HOME ?? '.'
   return resolvePath(home, '.ssh', 'config')
+}
+
+/** The current user's `known_hosts`, where a confirmed host key is recorded. */
+function defaultKnownHostsPath() {
+  const home = process.env.USERPROFILE ?? process.env.HOME ?? '.'
+  return resolvePath(home, '.ssh', 'known_hosts')
 }
 
 /**
@@ -217,6 +237,17 @@ export function refusalText(entry, failure, usedPassword) {
       `Проверьте отпечаток вне SSH и обновите запись:\n` +
       `  ssh-keygen -R ${entry.host}\n` +
       `Плагин новый ключ сам не принимает — это защита от подмены сервера.`
+    )
+  }
+  if (failure.code === 'HOST_KEY_UNKNOWN') {
+    // The first-connect state, and deliberately not a warning: a server you have
+    // never reached has no recorded key, which says nothing about trust.
+    const who = entry.user === undefined ? '' : `${entry.user}@`
+    return (
+      `Сервер ${name}: ключ хоста ещё не подтверждён — этого сервера нет в known_hosts.\n` +
+      `Это нормальное состояние первого подключения. Подтвердите отпечаток:\n` +
+      `  • в интерфейсе: Настройки → SSH → «Проверить», затем «Доверить ключ»;\n` +
+      `  • или один раз в терминале: ssh ${who}${entry.host}${entry.port === undefined || entry.port === 22 ? '' : ` -p ${entry.port}`}`
     )
   }
   if (failure.code === 'HOST_UNRESOLVED') return `Сервер ${name}: адрес ${entry.host} не разрешается.`
@@ -350,6 +381,7 @@ export function apply(ctx, config) {
   const home = resolveHome(undefined)
   const registryPath = config.registryPath ?? defaultRegistryPath(home)
   const sshConfigPath = config.sshConfigPath ?? defaultSshConfigPath()
+  const knownHostsPath = config.knownHostsPath ?? defaultKnownHostsPath()
   const resolved = {
     registryPath,
     sshPath: config.sshPath ?? defaultClient('ssh'),
@@ -867,7 +899,7 @@ export function apply(ctx, config) {
       name: {
         type: 'string',
         required: true,
-        description: 'Short selection name, for example "web1". Letters, digits, dot, dash or underscore.',
+        description: 'Short selection name, for example "web1" or "RU VPS Serv-Tech". Letters, digits, spaces, dot, dash, underscore or parentheses.',
       },
       host: { type: 'string', required: true, description: 'Address or OpenSSH host alias.' },
       user: { type: 'string', description: 'SSH user. Defaults to the client configuration.' },
@@ -1426,10 +1458,243 @@ export function apply(ctx, config) {
     return `Unknown server "${requested}"; only registered server names are reachable.`
   })
 
+  // --- shared operations -----------------------------------------------------
+  //
+  // The `/ssh` command and the Settings page are two callers of the same work:
+  // one connection probe, one import, one password store. These live at `apply`
+  // level rather than inside the command's injection so the page's route can
+  // call them without a second implementation drifting away from the first.
+
+  /**
+   * Read one stored password, or undefined when none is usable.
+   *
+   * @param name - the server name the password belongs to.
+   * @returns the stored password, if any.
+   */
+  const storedPassword = (name) => {
+    const document = readSecrets(resolved.secretsPath)
+    if (document.problem !== undefined) return undefined
+    return document.passwords[name]
+  }
+
+  /**
+   * Save one password and enforce the store's file permissions.
+   *
+   * @param name - the server name.
+   * @param password - the credential as typed.
+   */
+  const storePassword = async (name, password) => {
+    const document = readSecrets(resolved.secretsPath)
+    await writeSecrets(resolved.secretsPath, setPassword(document.passwords, name, password), { acl: aclOptions })
+  }
+
+  /**
+   * Forget one stored password.
+   *
+   * @param name - the server name.
+   */
+  const forgetPassword = async (name) => {
+    const document = readSecrets(resolved.secretsPath)
+    await writeSecrets(resolved.secretsPath, removePassword(document.passwords, name), { acl: aclOptions })
+  }
+
+  /**
+   * Run a connection test and describe the outcome in plain language.
+   *
+   * The stored password is used exactly as a real operation would use it.
+   * Omitting it would make the test lie in both directions: it would report
+   * failure for a server that works by password, and it would make the
+   * confirmation printed by `/ssh pass` contradict what was just stored.
+   *
+   * Output policy: a refusal is reported as one short Russian line plus the
+   * exact command that fixes it. Dumping OpenSSH's English stderr made a normal
+   * "this server needs a password" state look like a crash, which is what the
+   * user sees first and has to interpret. The raw text is kept in
+   * `technical` for the caller to append only where a human asks for details.
+   *
+   * @param entry - the server to test.
+   * @returns a human-readable result and the classified failure code.
+   */
+  const testHost = async (entry) => {
+    // A locked server is reported as locked rather than probed: opening a
+    // connection is itself an effect the lock is meant to prevent.
+    if (entry.locked === true) {
+      return { text: `Сервер ${entry.name}: заблокирован. Разблокировать: /ssh unlock ${entry.name}`, code: 'HOST_LOCKED' }
+    }
+    try {
+      const password = passwordFor(entry)
+      const result = await runProcess(runArgv(resolved, entry, 'true', undefined, password !== undefined), {
+        cwd: process.cwd(),
+        timeoutMs: resolved.connectTimeoutMs + 5_000,
+        signal: undefined,
+        password,
+        audit: { tool: 'ssh_test', server: entry.name, host: entry.host, command: 'true' },
+      })
+      const failure = classifyFailure(result.exitCode, result.stderr, result.passwordAuth)
+      if (failure === undefined) {
+        return { text: `Сервер ${entry.name}: подключение работает${password === undefined ? '' : ' (по паролю)'}.` }
+      }
+      return { text: refusalText(entry, failure, password !== undefined), code: failure.code, technical: failure.message }
+    } catch (error) {
+      return { text: `Сервер ${entry.name}: подключиться не удалось.\n${String(error?.message ?? error)}` }
+    }
+  }
+
+  /**
+   * Import the hosts found in the user's OpenSSH configuration.
+   *
+   * Returns data rather than prose: `/ssh sync` formats it for the transcript
+   * and the Settings page renders it as a notice, so neither has to parse the
+   * other's text.
+   *
+   * @returns added names, skipped patterns, how many were found, or an error.
+   */
+  const importFromSshConfig = async () => {
+    let text
+    try {
+      text = readFileSync(sshConfigPath, 'utf-8')
+    } catch (error) {
+      if (error?.code === 'ENOENT') {
+        return { added: [], skipped: [], found: 0, error: `Файл ${sshConfigPath} не найден.` }
+      }
+      return { added: [], skipped: [], found: 0, error: `Не удалось прочитать ${sshConfigPath}: ${String(error?.message ?? error)}` }
+    }
+    const { found, skipped } = parseSshConfig(text)
+    if (found.length === 0) {
+      return { added: [], skipped, found: 0 }
+    }
+    const merged = mergeDiscovered(hosts, found)
+    try {
+      await saveHosts(merged.hosts)
+    } catch (error) {
+      return { added: [], skipped, found: found.length, error: describeWriteFailure(error) }
+    }
+    return { added: merged.added, skipped, found: found.length }
+  }
+
+  // --- host-key trust --------------------------------------------------------
+  //
+  // `StrictHostKeyChecking=yes` means a server is never trusted because it
+  // answered, so the FIRST connection to a new machine is always refused. That
+  // refusal is not a fault, and it is not something the plugin may paper over:
+  // the human confirms a fingerprint once. These two functions are that step —
+  // one fetches the key the server presents right now, the other records only
+  // the keys whose fingerprints the page showed and the human approved.
+
+  /**
+   * Fetch the host key a server presents, without trusting it.
+   *
+   * A throwaway `known_hosts` file is the trick: `StrictHostKeyChecking=accept-new`
+   * records the key there instead of refusing the exchange, so the real
+   * connection is used to learn the key (the same code path and the same
+   * transport as every later call), and nothing outside that file changes.
+   *
+   * `ssh-keyscan` is deliberately not used: on Windows it can fail to negotiate
+   * with a modern server while `ssh` itself connects fine, and then the page
+   * would report "cannot read the key" for a server that works.
+   *
+   * @param entry - the server to ask.
+   * @returns the presented keys, or the classified reason none arrived.
+   */
+  const probeHostKey = async (entry) => {
+    const temporary = resolvePath(tmpdir(), `ssh-remote-hostkey-${randomUUID()}`)
+    const port = entry.port ?? 22
+    const destination = `${entry.user === undefined ? '' : `${entry.user}@`}${entry.host}`
+    const argv = [
+      resolved.sshPath,
+      '-o', 'StrictHostKeyChecking=accept-new',
+      // Quoted because a profile directory may contain spaces, and OpenSSH
+      // parses the option value like a config line.
+      '-o', `UserKnownHostsFile="${temporary}"`,
+      '-o', BATCH_MODE,
+      '-o', `ConnectTimeout=${Math.max(1, Math.ceil(resolved.connectTimeoutMs / 1000))}`,
+      ...(port === 22 ? [] : ['-p', String(port)]),
+      destination,
+      'true',
+    ]
+    try {
+      const result = await runProcess(argv, {
+        cwd: process.cwd(),
+        timeoutMs: resolved.connectTimeoutMs + 5_000,
+      })
+      let text = ''
+      try {
+        text = readFileSync(temporary, 'utf-8')
+      } catch (error) {
+        if (error?.code !== 'ENOENT') throw error
+      }
+      const keys = parseKnownHosts(text)
+      // The full records travel: `trustHostKey` writes the blob, and the page
+      // only ever receives `type` + `fingerprint`.
+      if (keys.length > 0) return { keys }
+      const failure = classifyFailure(result.exitCode, result.stderr, false)
+      return {
+        keys: [],
+        error: failure?.message ?? `The server did not present a host key: ${result.stderr.trim() || 'no answer'}`,
+      }
+    } finally {
+      await rm(temporary, { force: true })
+    }
+  }
+
+  /**
+   * Record the approved host key in `known_hosts`.
+   *
+   * The key is fetched again at write time: the page approved a FINGERPRINT, so
+   * what lands on disk must be the key the server presents now, not a blob that
+   * travelled through the browser. A key that changed in between is refused.
+   *
+   * @param entry - the server whose key was approved.
+   * @param fingerprints - the `SHA256:…` values the human confirmed.
+   * @returns the file written and how many lines were appended.
+   */
+  const trustHostKey = async (entry, fingerprints) => {
+    const approved = Array.isArray(fingerprints)
+      ? fingerprints.filter((value) => typeof value === 'string' && value.length > 0)
+      : []
+    if (approved.length === 0) {
+      throw new SshRemoteError('No fingerprint was approved, so nothing was trusted.', 'KEY_TRUST_REQUIRED')
+    }
+    const scanned = await probeHostKey(entry)
+    if (scanned.error !== undefined) throw new SshRemoteError(scanned.error, 'KEY_SCAN_FAILED')
+    const matched = scanned.keys.filter((key) => approved.includes(key.fingerprint))
+    if (matched.length === 0) {
+      throw new SshRemoteError(
+        'The server presented a different host key than the one you approved, so nothing was trusted. ' +
+          'Check the server, or connect once from a terminal and compare the fingerprint.',
+        'KEY_MISMATCH',
+      )
+    }
+    let existing = ''
+    try {
+      existing = readFileSync(knownHostsPath, 'utf-8')
+    } catch (error) {
+      if (error?.code !== 'ENOENT') {
+        throw new SshRemoteError(
+          `Не удалось прочитать ${knownHostsPath}: ${String(error?.message ?? error)}`,
+          'KNOWN_HOSTS_UNREADABLE',
+        )
+      }
+    }
+    const merged = mergeKnownHosts(existing, matched)
+    if (merged.conflict !== undefined) {
+      throw new SshRemoteError(
+        `known_hosts already records a different ${merged.conflict.type} key for ${merged.conflict.hostField}. ` +
+          'That is the changed-key case, not a first connection: verify the fingerprint out-of-band, then remove ' +
+          'the old entry yourself (ssh-keygen -R <address>).',
+        'KEY_CONFLICT',
+      )
+    }
+    if (merged.added.length > 0) {
+      await mkdir(dirname(knownHostsPath), { recursive: true })
+      await appendFile(knownHostsPath, merged.append, 'utf-8')
+    }
+    return { path: knownHostsPath, added: merged.added.map((line) => line.split(/\s+/)[1]) }
+  }
+
   // --- /ssh ------------------------------------------------------------------
 
-  ctx.inject(['commands'], (commandCtx) => {
-    /** The server list rendered as a preformatted report. */
+  ctx.inject(['commands'], (commandCtx) => {    /** The server list rendered as a preformatted report. */
     const renderHosts = () => {
       if (hosts.length === 0) {
         return [
@@ -1580,47 +1845,9 @@ export function apply(ctx, config) {
       return lines.join('\n')
     }
 
-    /**
-     * Run a connection test and describe the outcome in plain language.
-     *
-     * The stored password is used exactly as a real operation would use it.
-     * Omitting it would make the test lie in both directions: it would report
-     * failure for a server that works by password, and it would make the
-     * confirmation printed by `/ssh pass` contradict what was just stored.
-     *
-     * Output policy: a refusal is reported as one short Russian line plus the
-     * exact command that fixes it. Dumping OpenSSH's English stderr made a normal
-     * "this server needs a password" state look like a crash, which is what the
-     * user sees first and has to interpret. The raw text is kept in
-     * `technical` for the caller to append only where a human asks for details.
-     *
-     * @param entry - the server to test.
-     * @returns a human-readable result and the classified failure code.
-     */
-    const testHost = async (entry, agent) => {
-      // A locked server is reported as locked rather than probed: opening a
-      // connection is itself an effect the lock is meant to prevent.
-      if (entry.locked === true) {
-        return { text: `Сервер ${entry.name}: заблокирован. Разблокировать: /ssh unlock ${entry.name}`, code: 'HOST_LOCKED' }
-      }
-      try {
-        const password = passwordFor(entry)
-        const result = await runProcess(runArgv(resolved, entry, 'true', undefined, password !== undefined), {
-          cwd: process.cwd(),
-          timeoutMs: resolved.connectTimeoutMs + 5_000,
-          signal: undefined,
-          password,
-          audit: { tool: 'ssh_test', server: entry.name, host: entry.host, command: 'true' },
-        })
-        const failure = classifyFailure(result.exitCode, result.stderr, result.passwordAuth)
-        if (failure === undefined) {
-          return { text: `Сервер ${entry.name}: подключение работает${password === undefined ? '' : ' (по паролю)'}.` }
-        }
-        return { text: refusalText(entry, failure, password !== undefined), code: failure.code, technical: failure.message }
-      } catch (error) {
-        return { text: `Сервер ${entry.name}: подключиться не удалось.\n${String(error?.message ?? error)}` }
-      }
-    }
+    // The connection probe (`testHost`) and the SSH-config import live at
+    // `apply` level: the Settings page calls the same functions, so there is one
+    // implementation of each rather than a command copy and a page copy.
 
     /** Ask the user to pick a server from the registry. */
     const pickHost = async (agent, signal) => {
@@ -1698,10 +1925,7 @@ export function apply(ctx, config) {
         return { kind: 'error', text: `Неизвестный сервер "${name}". Зарегистрированы: ${known.length > 0 ? known : 'нет'}.` }
       }
       try {
-        const document = readSecrets(resolved.secretsPath)
-        await writeSecrets(resolved.secretsPath, setPassword(document.passwords, entry.name, password), {
-          acl: aclOptions,
-        })
+        await storePassword(entry.name, password)
       } catch (error) {
         return { kind: 'error', text: `Не удалось сохранить пароль: ${String(error?.message ?? error)}` }
       }
@@ -1722,10 +1946,7 @@ export function apply(ctx, config) {
       const entry = findEntry(hosts, name)
       if (entry === undefined) return { kind: 'error', text: `Неизвестный сервер "${name}".` }
       try {
-        const document = readSecrets(resolved.secretsPath)
-        await writeSecrets(resolved.secretsPath, removePassword(document.passwords, entry.name), {
-          acl: aclOptions,
-        })
+        await forgetPassword(entry.name)
       } catch (error) {
         return { kind: 'error', text: `Не удалось изменить хранилище паролей: ${String(error?.message ?? error)}` }
       }
@@ -1772,46 +1993,60 @@ export function apply(ctx, config) {
     }
 
     /**
-     * Import servers discovered in the SSH config and render the outcome.
+     * Render the outcome of an SSH-config import for the transcript.
      *
-     * Always returns display text: the picker path calls it directly, so a
-     * structured return would leak an object into the command output.
+     * The import itself is shared with the Settings page; this function only
+     * turns its data into the sentences `/ssh sync` has always printed.
      *
      * @returns the report to show the user.
      */
     const syncFlow = async () => {
-      let text
-      try {
-        text = readFileSync(sshConfigPath, 'utf-8')
-      } catch (error) {
-        if (error?.code === 'ENOENT') return `Файл ${sshConfigPath} не найден. Добавьте сервер через /ssh add.`
-        return `Не удалось прочитать ${sshConfigPath}: ${String(error?.message ?? error)}`
+      const imported = await importFromSshConfig()
+      if (imported.error !== undefined) {
+        return imported.found === 0 && imported.added.length === 0
+          ? `${imported.error} Добавьте сервер через /ssh add.`
+          : imported.error
       }
-      const { found, skipped } = parseSshConfig(text)
-      if (found.length === 0) {
-        return `В ${sshConfigPath} не найдено ни одного пригодного Host-блока. Пропущено: ${skipped.join(', ') || '—'}`
-      }
-      const merged = mergeDiscovered(hosts, found)
-      try {
-        await saveHosts(merged.hosts)
-      } catch (error) {
-        // Report the failure instead of throwing: an unhandled throw would abort
-        // the whole command with no explanation of what went wrong.
-        return describeWriteFailure(error)
+      if (imported.found === 0) {
+        return (
+          `В ${sshConfigPath} не найдено ни одного пригодного Host-блока. ` +
+          `Пропущено: ${imported.skipped.join(', ') || '—'}`
+        )
       }
       const lines = [
-        `Импортировано из ${sshConfigPath}: добавлено ${merged.added.length}, уже было ${found.length - merged.added.length}.`,
+        `Импортировано из ${sshConfigPath}: добавлено ${imported.added.length}, ` +
+          `уже было ${imported.found - imported.added.length}.`,
       ]
-      if (merged.added.length > 0) lines.push('', `Добавлены: ${merged.added.join(', ')}`)
-      if (skipped.length > 0) {
+      if (imported.added.length > 0) lines.push('', `Добавлены: ${imported.added.join(', ')}`)
+      if (imported.skipped.length > 0) {
         lines.push(
           '',
-          `Пропущены неподдерживаемые или шаблонные блоки: ${skipped.join(', ')}.`,
+          `Пропущены неподдерживаемые или шаблонные блоки: ${imported.skipped.join(', ')}.`,
           'Include, Match и шаблоны с * не разворачиваются — добавьте такие серверы через /ssh add, чтобы адрес не оказался угаданным.',
         )
       }
       lines.push('', renderHosts())
       return lines.join('\n')
+    }
+
+    /**
+     * Check one server without touching the default.
+     *
+     * Picking a server and making it the default were once one implicit step, so
+     * a plain reachability check silently changed which server the tools used.
+     * `/ssh <имя>` only checks; `/ssh default <имя>` deliberately changes it.
+     *
+     * @param entry - the server to check.
+     * @returns the command result to render.
+     */
+    const checkFlow = async (entry) => {
+      const checked = (await testHost(entry)).text
+      return {
+        kind: 'success',
+        text: preferred === entry.name
+          ? checked
+          : `${checked}\n\nСделать сервером по умолчанию:  /ssh default ${entry.name}`,
+      }
     }
 
     commandCtx.commands.register({
@@ -1863,6 +2098,13 @@ export function apply(ctx, config) {
           if (argument.startsWith('nopass')) {
             return await nopassFlow(argument.slice('nopass'.length).trim())
           }
+
+          // A server name may contain spaces, so the WHOLE line is tried against
+          // the registry before the verb is parsed: `/ssh RU VPS Serv-Tech` must
+          // be a name, not the unknown verb "RU". A verb still wins whenever no
+          // server is named that way, so `/ssh test web1` keeps working.
+          const named = findEntry(hosts, argument)
+          if (named !== undefined) return await checkFlow(named)
 
           const [verb, ...rest] = argument.split(/\s+/)
           const target = rest.join(' ').trim()
@@ -1929,14 +2171,7 @@ export function apply(ctx, config) {
           // reachability test cannot silently redirect the tools.
           const entry = findEntry(hosts, argument)
           if (entry === undefined) return { kind: 'error', text: `Неизвестный сервер "${argument}".\n\n${renderHosts()}` }
-          const checked = (await testHost(entry, agent)).text
-          const isDefault = preferred === entry.name
-          return {
-            kind: 'success',
-            text: isDefault
-              ? checked
-              : `${checked}\n\nСделать сервером по умолчанию:  /ssh default ${entry.name}`,
-          }
+          return await checkFlow(entry)
         } catch (error) {
           // Nothing may escape: an unhandled throw becomes a failed command with
           // no explanation, which is exactly how a denied registry write looked
@@ -1945,6 +2180,55 @@ export function apply(ctx, config) {
         }
       },
     })
+  })
+
+  // --- settings page ---------------------------------------------------------
+  //
+  // The browser half edits the registry through this one route. It is mounted on
+  // Connection's Fetch handler rather than the bare web server, so it inherits
+  // the host's own trust and login fence (Host/Origin checks plus the browser
+  // credential) and is refused to every non-owner Peer. Re-implementing either
+  // check here would be a second security surface; bypassing them would expose
+  // the allowlist — and the SSH authority behind it — to any local page.
+  //
+  // Without a `connection` service (a headless composition) the page simply has
+  // no route: the plugin keeps working through `/ssh` and the agent tools, which
+  // is the honest degradation.
+  const uiApi = createUiApi({
+    registryPath: resolved.registryPath,
+    sshConfigPath,
+    sshClient: resolved.sshPath,
+    knownHostsPath,
+    readHosts: () => {
+      // A read before each request keeps an external edit, or another session,
+      // from being clobbered by a stale snapshot.
+      loadHosts(false)
+      return { hosts, default: preferred, warnings: lastWarnings }
+    },
+    saveHosts,
+    removeServer: removeEntry,
+    findEntry,
+    normalizeEntry,
+    upsertEntry,
+    hasPassword: (name) => storedPassword(name) !== undefined,
+    readPassword: (name) => storedPassword(name),
+    storePassword,
+    forgetPassword,
+    testEntry: (entry) => testHost(entry),
+    importFromConfig: importFromSshConfig,
+    scanHostKey: probeHostKey,
+    trustHostKey,
+  })
+  ctx.inject(['connection'], (connectionCtx) => {
+    connectionCtx.effect(
+      () => connectionCtx.connection.fetch.register({
+        path: UI_PATH,
+        methods: ['GET', 'POST'],
+        requestBody: 'buffered',
+        fetch: (request) => uiApi.handle(request),
+      }),
+      'ssh-remote: settings page route',
+    )
   })
 
   loadHosts(false)

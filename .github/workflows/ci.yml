@@ -27,13 +27,26 @@ jobs:
       - name: Install the peer dependency for the tests
         run: npm install --no-audit --no-fund
 
-      # Both suites must stay green on every supported OS: the Windows-specific
+      # Every suite must stay green on every supported OS: the Windows-specific
       # paths (icacls, *.exe defaults, rename retries) only run there.
       - name: Pure layers (argv, policy, redaction, registry, ACL, audit)
         run: node test-args.mjs
 
+      - name: Host-key helpers (fingerprints, known_hosts merge)
+        run: node test-hostkey.mjs
+
       - name: Host half (tools, policy gate, /ssh) on the fake subprocess
         run: node test-host.mjs
+
+      # The page's HTTP face, driven through the real route handler: registry
+      # writes, the write-only password, the import and the host-key probe.
+      - name: Settings API (registry, password, import, host key)
+        run: node test-ui.mjs
+
+      # The browser half is plain JavaScript, so it can be loaded and rendered
+      # here without a browser; a crash in a slot would blank the settings page.
+      - name: Client half (section registration and render branches)
+        run: node test-client.mjs
 
       # The test files legitimately contain fake key material, so the scan covers
       # the shipped sources and the docs rather than the whole tree (and would
@@ -44,6 +57,7 @@ jobs:
           set -euo pipefail
           hits=$(grep -InE '(BEGIN [A-Z ]*PRIVATE KEY|AKIA[0-9A-Z]{16}|77\.239\.|94\.232\.)' \
             index.js args.js registry.js secrets.js audit.js acl.js atomic.js \
+            hostkey.js ui-api.js client.js \
             cordis.patch.yml profile-patch-snippet.yml README.md README.ru.md || true)
           if [ -n "$hits" ]; then
             echo "$hits"

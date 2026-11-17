@@ -31,7 +31,11 @@ host per workspace. This plugin is the other shape:
 - **Guardrails on by default.** Catastrophic commands never run, irreversible
   ones ask first, secrets are cut from output before the model sees it, and every
   call lands in an audit log.
-- **Small enough to read.** Six source files, no client bundle, no build step.
+- **A Settings page, not just commands.** Add, edit, test, lock and delete
+  servers in **Settings → SSH**, with the same registry the agent uses. The
+  command surface stays available for scripting.
+- **Small enough to read.** No build step, no runtime dependencies, and the
+  browser half is a single plain-JavaScript file.
 
 If you want a full remote workspace — remote file editing, a terminal panel, LSP —
 use [`dsh-ssh`](https://github.com/UynajGI/dsh-ssh),
@@ -54,7 +58,43 @@ so `dsh plugin add` refuses a host outside that range instead of installing
 half-way. There is nothing else to install: the plugin drives the `ssh` and
 `scp` binaries already on the machine, so it pulls in no runtime dependencies.
 
-Then add servers with `/ssh sync` (import from `~/.ssh/config`) or `/ssh add`.
+Then add servers with `/ssh sync` (import from `~/.ssh/config`) or `/ssh add`,
+or open **Settings → SSH** and use the manager there.
+
+## Configure from Settings
+
+**Settings → SSH** lists every registered server with its address, port, key or
+password state, the default marker and the lock state, and offers the operations
+that used to require a slash command:
+
+- **Add server** / **Edit** — name, address, user, port, key path, password,
+  default remote directory and a note. Saving validates through the same
+  `normalizeEntry` the tools use, so a bad port or a note typed into the key field
+  is refused here rather than failing at the first connection. The name is a
+  human label: **several words work** (`RU VPS Serv-Tech`), in any script, and
+  runs of whitespace collapse to one space. A password typed in the same form is
+  stored with the entry, so a server that has no key yet takes one visit, not two.
+- **Test** — runs the same `ssh -o BatchMode=yes … true` probe as `/ssh test`,
+  with the stored password when there is one, and reports the classified refusal
+  in one line.
+- **Trust this key** — a server you have never connected to has no key in
+  `known_hosts`, so strict checking refuses it. That is the normal first-connect
+  state, not an attack, and the page says so: after a failed test it offers
+  **Trust this key**, shows the fingerprint it fetched from the server, and writes
+  it to `known_hosts` only after you confirm. A key that *changed* gets no such
+  button — that case stays with `ssh-keygen -R` and an out-of-band check.
+- **Make default**, **Lock** / **Unlock**, **Delete** — the registry operations,
+  with a confirmation before a delete.
+- **Import from ~/.ssh/config** — the `/ssh sync` import; unsupported blocks
+  (`Include`, `Match`, wildcards) are reported, never guessed.
+- **Password** — write-only: the field stores the credential through the helper
+  program and is never shown again. Only "saved / not saved" is displayed.
+
+The page talks to the Host over `/api/ssh-remote`, an exact route registered on
+DSH's own Connection Fetch handler. That seat is deliberate: the route inherits
+the host's trust and login fence and is refused to every non-owner Peer, so no
+second authentication layer is written here. Every action calls the same
+functions `/ssh` and the agent tools call, so the two cannot disagree.
 
 ## Quick start
 

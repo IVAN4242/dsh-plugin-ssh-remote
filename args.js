@@ -720,13 +720,29 @@ export const EXIT_PREFIX = 'exit='
 export function classifyFailure(exitCode, stderr, passwordAuth) {
   if (exitCode === 0) return undefined
   const text = String(stderr ?? '')
-  if (/REMOTE HOST IDENTIFICATION HAS CHANGED|Host key verification failed/i.test(text)) {
+  // A CHANGED key and an UNKNOWN one both end in "Host key verification failed",
+  // so the banner has to be read first. Conflating them told a first-time user
+  // that their new server had been replaced — frightening, and wrong.
+  if (/REMOTE HOST IDENTIFICATION HAS CHANGED|Host key for .* has changed/i.test(text)) {
     return {
       code: 'HOST_KEY_CHANGED',
       message:
         'The server presented a different host key than the one recorded in known_hosts. ' +
         'This is either a reinstall or an interception, so the plugin refuses to continue. ' +
         `Verify the fingerprint out-of-band, then update known_hosts yourself (ssh-keygen -R <address>).\n\n${text}`,
+    }
+  }
+  if (
+    /No .* host key is known for|is known for .* and you have requested strict checking/i.test(text) ||
+    /Host key verification failed/i.test(text)
+  ) {
+    return {
+      code: 'HOST_KEY_UNKNOWN',
+      message:
+        "The server's host key is not in known_hosts yet, and host-key checking is strict, so the connection was " +
+        'refused. This is the normal state of a server you have never connected to: nothing is wrong with it. ' +
+        'Confirm the fingerprint once — Settings → SSH offers "Trust this key" after a failed test — or connect ' +
+        `once in a terminal, then retest.\n\n${text}`,
     }
   }
   if (/Permission denied/i.test(text)) {

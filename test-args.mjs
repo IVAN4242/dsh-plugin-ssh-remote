@@ -453,7 +453,35 @@ ok('a rejected password is explained as a password problem', () => {
 ok('host-key order wins over the generic 255 branch', () => {
   // Both conditions exit 255; the more important one must be chosen.
   const failure = classifyFailure(255, 'Host key verification failed.')
+  assert.equal(failure.code, 'HOST_KEY_UNKNOWN')
+})
+
+ok('a first connection is not reported as an attack', () => {
+  // The real stderr of a server whose key is simply not recorded yet. Calling
+  // this "the key changed" told a new owner their fresh server had been
+  // replaced, and pointed them at ssh-keygen -R instead of the one-time trust.
+  const failure = classifyFailure(
+    255,
+    'No ED25519 host key is known for 192.0.2.10 and you have requested strict checking.\nHost key verification failed.',
+  )
+  assert.equal(failure.code, 'HOST_KEY_UNKNOWN')
+  assert.match(failure.message, /not in known_hosts yet/)
+  assert.match(failure.message, /Trust this key/)
+  assert.doesNotMatch(failure.message, /different host key/)
+})
+
+ok('a genuinely changed key keeps the alarm', () => {
+  const failure = classifyFailure(
+    255,
+    '@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n' +
+      '@    WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!     @\n' +
+      '@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n' +
+      'Host key for 192.0.2.10 has changed and you have requested strict checking.\n' +
+      'Host key verification failed.',
+  )
   assert.equal(failure.code, 'HOST_KEY_CHANGED')
+  assert.match(failure.message, /different host key/)
+  assert.doesNotMatch(failure.message, /Trust this key/)
 })
 
 ok('network failures are named distinctly', () => {
@@ -556,12 +584,26 @@ ok('the run report always carries stdout, stderr and the exit code', () => {
 
 ok('entry normalization rejects unusable names and hosts', () => {
   assert.throws(() => normalizeEntry({ name: '', host: 'h' }), RegistryError)
-  assert.throws(() => normalizeEntry({ name: 'has space', host: 'h' }), RegistryError)
+  assert.throws(() => normalizeEntry({ name: 'has/slash', host: 'h' }), RegistryError)
+  assert.throws(() => normalizeEntry({ name: 'has:colon', host: 'h' }), RegistryError)
+  assert.throws(() => normalizeEntry({ name: `x`.repeat(65), host: 'h' }), RegistryError)
   assert.throws(() => normalizeEntry({ name: 'ok', host: '' }), RegistryError)
   assert.throws(() => normalizeEntry({ name: 'ok', host: 'h', port: 0 }), RegistryError)
   assert.throws(() => normalizeEntry({ name: 'ok', host: 'h', port: 70000 }), RegistryError)
   const entry = normalizeEntry({ name: 'web-1', host: 'h', user: 'root', port: 2222 })
   assert.deepEqual({ name: entry.name, host: entry.host, user: entry.user, port: entry.port }, { name: 'web-1', host: 'h', user: 'root', port: 2222 })
+})
+
+ok('a server name may be several words, and whitespace runs collapse', () => {
+  // The name is the selection key, but it is also what a person types and reads:
+  // "RU VPS Serv-Tech" is a name, and two spaces must not create a second entry
+  // that looks identical in every listing.
+  const named = normalizeEntry({ name: 'RU VPS  Serv-Tech', host: 'h' })
+  assert.equal(named.name, 'RU VPS Serv-Tech')
+  assert.equal(normalizeEntry({ name: '  RU VPS Serv-Tech  ', host: 'h' }).name, 'RU VPS Serv-Tech')
+  // Any script, because the user's own language is a reasonable name.
+  assert.equal(normalizeEntry({ name: 'Тестовый сервер', host: 'h' }).name, 'Тестовый сервер')
+  assert.equal(normalizeEntry({ name: 'web (prod)', host: 'h' }).name, 'web (prod)')
 })
 
 ok('duplicate names are refused unless replacement is explicit', () => {
@@ -596,7 +638,7 @@ ok('only a broken FILE is fatal; a repairable row is a warning', async () => {
   // One unusable row must NOT be fatal, or a single bad entry would take the
   // whole command down. This distinction is a fixed bug: conflating the two made
   // /ssh refuse to list a registry that was otherwise perfectly usable.
-  await writeFile(path, JSON.stringify({ version: 1, hosts: [{ name: 'ok', host: 'h' }, { name: 'bad name', host: 'h' }] }), 'utf-8')
+  await writeFile(path, JSON.stringify({ version: 1, hosts: [{ name: 'ok', host: 'h' }, { name: 'bad/name', host: 'h' }] }), 'utf-8')
   const partial = readRegistry(path)
   assert.equal(partial.hosts.length, 1, 'the valid row survives')
   assert.equal(partial.problem, undefined, 'a skipped row must not be fatal')
